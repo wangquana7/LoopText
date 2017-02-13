@@ -7,15 +7,23 @@
 //
 
 #import "TextFlowView.h"
+static const CGFloat SPACE_WIDTH = 50.0;
+static const NSTimeInterval LOOP_PERIOD = 0.02;
 
+@interface TextFlowView ()
+
+@property (nonatomic, copy) dispatch_source_t loopTimer;//!<滚动事件定时器
+@property (nonatomic, assign, getter=isNeedFlow) BOOL needFlow;
+//@property (nonatomic, assign) NSUInteger startIndex;
+@property (nonatomic, assign) CGFloat x_offset;//!<定时器每次执行偏移后，累计的偏移量之和
+@property (nonatomic, assign) CGSize textSize;//!<文本显示一行，需要的框架大小
+@end
 
 @implementation TextFlowView
 
-#pragma mark -
-#pragma mark 内部调用
-
-#define SPACE_WIDTH 50
-#define LABEL_NUM 2
+- (void)dealloc{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 
 //改变一个TRect的起始点位置，但是其终止店点的位置不变，因此会导致整个框架大小的变化
 - (CGRect)moveNewPoint:(CGPoint)point rect:(CGRect)rect
@@ -28,16 +36,25 @@
 //开启定时器
 - (void)startRun
 {
-    _timer = [NSTimer scheduledTimerWithTimeInterval:0.02 target:self selector:@selector(timerAction) userInfo:nil repeats:YES];
-    [[NSRunLoop currentRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
+    NSTimeInterval period = LOOP_PERIOD; //设置时间间隔
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    _loopTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    dispatch_source_set_timer(_loopTimer, dispatch_walltime(NULL, 0), period * NSEC_PER_SEC, 0); //每秒执行
+    dispatch_source_set_event_handler(_loopTimer, ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self timerAction];
+        });
+    });
+    
+    dispatch_resume(_loopTimer);
 }
 
 //关闭定时器
 - (void)cancelRun
 {
-    if (_timer) 
-    {
-        [_timer invalidate];
+    if(_loopTimer){
+        dispatch_source_cancel(_loopTimer);
+        _loopTimer = nil;
     }
 }
 
@@ -45,11 +62,11 @@
 - (void)timerAction
 {
     static CGFloat offsetOnce = -1;
-    _XOffset += offsetOnce;
-    if (_XOffset +  _textSize.width <= 0) 
+    _x_offset += offsetOnce;
+    if (_x_offset +  _textSize.width <= 0)
     {
-        _XOffset += _textSize.width;
-        _XOffset += SPACE_WIDTH;
+        _x_offset += _textSize.width;
+        _x_offset += SPACE_WIDTH;
     }
     [self setNeedsDisplay];
 }
@@ -67,7 +84,7 @@
 }
 
 
-- (id)initWithFrame:(CGRect)frame Text:(NSString *)text
+- (instancetype)initWithFrame:(CGRect)frame Text:(NSString *)text
 {
     self = [super initWithFrame:frame];
     if (self) 
@@ -76,7 +93,7 @@
         self.frame = frame;
         //默认的字体大小
         self.font = [UIFont systemFontOfSize:16.0F];
-        self.backgroundColor = [UIColor redColor];
+        self.backgroundColor = [UIColor grayColor];
         self.lineBreakMode = NSLineBreakByCharWrapping;
         //初始化标签
         //判断是否需要滚动效果
@@ -86,9 +103,10 @@
         {
             _needFlow = YES;
             [self startRun];
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(startRun) name:UIApplicationWillEnterForegroundNotification object:nil];
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(cancelRun) name:UIApplicationDidEnterBackgroundNotification object:nil];
         }
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(startRun) name:@"enterFore" object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(cancelRun) name:@"enterBack" object:nil];
+        
     }
     return self;
 }
@@ -100,14 +118,12 @@
     CGPoint origin = rect.origin;
     if (_needFlow == YES)
     {
-        rect = [self moveNewPoint:CGPointMake(_XOffset, startYOffset) rect:rect];
+        rect = [self moveNewPoint:CGPointMake(_x_offset, startYOffset) rect:rect];
         while (rect.origin.x <= rect.size.width+rect.origin.x)
         {
             [super drawTextInRect:rect];
-//            [_text drawInRect:rect withAttributes:@{NSFontAttributeName : _font}];
             rect = [self moveNewPoint:CGPointMake(rect.origin.x+_textSize.width+SPACE_WIDTH, rect.origin.y) rect:rect];
         }
-        
     }
     else
     {
@@ -116,7 +132,6 @@
         origin.y = (rect.size.height - _textSize.height)/2;
         rect.origin = origin;
         [super drawTextInRect:rect];
-//        [_text drawInRect:rect withAttributes:@{NSFontAttributeName : _font}];
     }
 }
 
